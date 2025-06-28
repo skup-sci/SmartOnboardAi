@@ -1,5 +1,11 @@
 # SmartOnboardAI
 
+[![Netlify Status](https://api.netlify.com/api/v1/badges/cdaccf6e-xxxx-xxxx-xxxx-xxxxxxxxxxxx/deploy-status)](https://papaya-panda-cdaccf.netlify.app/)
+
+## 🚀 Live Demo
+
+👉 [View the deployed app on Netlify](https://papaya-panda-cdaccf.netlify.app/)
+
 A Source-Adaptive Experience app that leverages AI to personalize content based on where users come from. Built with React Native and Expo, with Gemini AI integration.
 
 ## Features
