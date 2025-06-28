@@ -1,0 +1,376 @@
+import React, { createContext, useState, useEffect, ReactNode } from 'react';
+import { UserService } from '../services/userService';
+import { AnalyticsService } from '../services/analyticsService';
+import { GeminiService } from '../services/geminiService';
+import { detectUserSource } from '../utils/sourceDetection';
+import { User, UserSource, ContentItem, UserInteraction } from '../types';
+import { MOCK_CONTENT } from '../constants';
+
+interface AppContextType {
+  user: User | null;
+  source: UserSource;
+  isLoading: boolean;
+  content: ContentItem[];
+  welcomeMessage: string;
+  explorationPath: ContentItem[];
+  userEngagement: {
+    overall: number;
+    bySource: Record<UserSource, number>;
+  };
+  initializeApp: () => Promise<void>;
+  setUserSource: (source: UserSource) => void;
+  trackContentView: (contentId: string) => void;
+  trackInteraction: (contentId: string, interactionType: UserInteraction, durationMs?: number) => Promise<void>;
+  getPersonalizedSuggestions: (contentId: string) => Promise<ContentItem[]>;
+  refreshExplorationPath: () => Promise<void>;
+}
+
+export const AppContext = createContext<AppContextType>({
+  user: null,
+  source: 'unknown',
+  isLoading: true,
+  content: [],
+  welcomeMessage: 'Welcome to SmartOnboardAI!',
+  explorationPath: [],
+  userEngagement: {
+    overall: 0,
+    bySource: {
+      instagram: 0,
+      referral: 0,
+      blog: 0,
+      direct: 0,
+      unknown: 0
+    }
+  },
+  initializeApp: async () => {},
+  setUserSource: () => {},
+  trackContentView: () => {},
+  trackInteraction: async () => {},
+  getPersonalizedSuggestions: async () => [],
+  refreshExplorationPath: async () => {},
+});
+
+interface AppProviderProps {
+  children: ReactNode;
+}
+
+export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
+  const [user, setUser] = useState<User | null>(null);
+  const [source, setSource] = useState<UserSource>('unknown');
+  const [isLoading, setIsLoading] = useState(true);
+  const [content, setContent] = useState<ContentItem[]>(MOCK_CONTENT);
+  const [welcomeMessage, setWelcomeMessage] = useState('Welcome to SmartOnboardAI!');
+  const [explorationPath, setExplorationPath] = useState<ContentItem[]>([]);
+  const [userEngagement, setUserEngagement] = useState<{
+    overall: number;
+    bySource: Record<UserSource, number>;
+  }>({
+    overall: 0,
+    bySource: {
+      instagram: 0,
+      referral: 0,
+      blog: 0,
+      direct: 0,
+      unknown: 0
+    }
+  });
+
+  // Helper function to safely get relevance score for any source
+  const getSourceRelevance = (item: ContentItem, source: UserSource): number => {
+    return (item.sourceRelevance as Record<string, number | undefined>)[source] || 0;
+  };
+
+  const userService = new UserService();
+  const analyticsService = new AnalyticsService();
+  const geminiService = new GeminiService();
+
+  const initializeApp = async () => {
+    try {
+      setIsLoading(true);
+      
+      // Detect the source
+      const detectedSource = await detectUserSource();
+      setSource(detectedSource);
+      
+      // Initialize user with the detected source
+      const initializedUser = await userService.initUser(detectedSource);
+      setUser(initializedUser);
+      
+      // Track the new user in analytics
+      await analyticsService.trackNewUser(detectedSource);
+      
+      // Get personalized content
+      const personalizedContent = await userService.getPersonalizedContent();
+      setContent(personalizedContent);
+      
+      // Generate welcome message asynchronously (don't block on API failures)
+      Promise.resolve().then(async () => {
+        try {
+          const message = await geminiService.generateWelcomeMessage(detectedSource);
+          setWelcomeMessage(message);
+        } catch (aiError) {
+          console.warn('Failed to generate welcome message:', aiError);
+          // Default message already set in state
+        }
+      });
+      
+      // Generate exploration path asynchronously
+      Promise.resolve().then(() => refreshExplorationPath().catch(err => 
+        console.warn('Failed to refresh exploration path:', err)
+      ));
+      
+      // Get user engagement metrics
+      const engagement = await userService.calculateEngagementScore();
+      setUserEngagement(engagement);
+    } catch (error) {
+      console.error('Error initializing app:', error);
+      // Ensure critical app features work even if some initialization fails
+      if (!user) {
+        // Create a fallback user if user initialization failed
+        setUser({
+          id: `user-${Date.now()}`,
+          source: source || 'unknown'
+        });
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const setUserSource = async (newSource: UserSource) => {
+    try {
+      // Update the source immediately for UI responsiveness
+      setSource(newSource);
+      
+      // Update user with new source
+      try {
+        const updatedUser = await userService.initUser(newSource);
+        setUser(updatedUser);
+      } catch (userError) {
+        console.error('Error updating user with new source:', userError);
+        // Fallback to updating just the source in the current user
+        setUser(prevUser => prevUser ? {...prevUser, source: newSource} : null);
+      }
+      
+      // Track the new source in analytics - don't block on this
+      analyticsService.trackNewUser(newSource).catch(err => 
+        console.warn('Error tracking source change in analytics:', err)
+      );
+      
+      // Update content based on new source
+      try {
+        const personalizedContent = await userService.getPersonalizedContent();
+        setContent(personalizedContent);
+      } catch (contentError) {
+        console.error('Error getting personalized content:', contentError);
+        // Content remains unchanged on error
+      }
+      
+      // Update welcome message - async, non-blocking
+      Promise.resolve().then(async () => {
+        try {
+          const message = await geminiService.generateWelcomeMessage(newSource);
+          setWelcomeMessage(message);
+        } catch (messageError) {
+          console.warn('Error generating welcome message:', messageError);
+          // Set a default message for the source
+          const defaultMessages: Record<UserSource, string> = {
+            instagram: 'Welcome from Instagram! Check out our visual experience.',
+            referral: 'Thanks for joining through a referral! Here\'s what your friends love.',
+            blog: 'Welcome, blog reader! Dive deeper into our content.',
+            direct: 'Welcome to SmartOnboardAI! Discover personalized content.',
+            unknown: 'Welcome! Let\'s personalize your experience.',
+          };
+          setWelcomeMessage(defaultMessages[newSource] || defaultMessages.unknown);
+        }
+      });
+      
+      // Refresh exploration path based on new source - async, non-blocking
+      Promise.resolve().then(() => 
+        refreshExplorationPath().catch(err => 
+          console.warn('Error refreshing exploration path after source change:', err)
+        )
+      );
+    } catch (error) {
+      console.error('Error setting user source:', error);
+    }
+  };
+
+  const trackContentView = async (contentId: string) => {
+    if (!user) return;
+    
+    try {
+      // Track in user service
+      await userService.trackContentViewed(contentId);
+      
+      // Track in analytics
+      await analyticsService.trackEngagement(user.source, 'views');
+      
+      // Potentially update content recommendations
+      const personalizedContent = await userService.getPersonalizedContent();
+      setContent(personalizedContent);
+    } catch (error) {
+      console.error('Error tracking content view:', error);
+    }
+  };
+  
+  const trackInteraction = async (contentId: string, interactionType: UserInteraction, durationMs?: number) => {
+    if (!user) return;
+    
+    try {
+      // Track detailed interaction
+      await userService.trackUserInteraction(contentId, interactionType, durationMs);
+      
+      // Track in analytics
+      await analyticsService.trackEngagement(user.source, interactionType);
+      
+      // Update user engagement metrics
+      const engagement = await userService.calculateEngagementScore();
+      setUserEngagement(engagement);
+    } catch (error) {
+      console.error(`Error tracking ${interactionType}:`, error);
+    }
+  };
+
+  const getPersonalizedSuggestions = async (currentContentId: string): Promise<ContentItem[]> => {
+    if (!user) return content.filter(c => c.id !== currentContentId).slice(0, 3);
+    
+    // Create a fallback suggestion generator that doesn't rely on the API
+    const getFallbackSuggestions = (): ContentItem[] => {
+      const availableContent = MOCK_CONTENT.filter(item => item.id !== currentContentId);
+      
+      // Sort by relevance to user source
+      return availableContent
+        .sort((a, b) => {
+          // Use helper function to safely get relevance scores
+          const scoreA = getSourceRelevance(a, user.source);
+          const scoreB = getSourceRelevance(b, user.source);
+          return scoreB - scoreA;
+        })
+        .slice(0, 3);
+    };
+    
+    try {
+      // Get viewed content items
+      const viewedContentIds = user.preferences?.viewedContent || [];
+      const viewedContent = MOCK_CONTENT.filter(item => 
+        viewedContentIds.includes(item.id)
+      );
+      
+      // Get available content excluding current one
+      const availableContent = MOCK_CONTENT.filter(item => item.id !== currentContentId);
+      
+      // Check if Gemini API is initialized
+      if (!geminiService["initialized"]) {
+        console.warn('Gemini service not initialized, using fallback suggestions');
+        return getFallbackSuggestions();
+      }
+      
+      // Set a timeout for the API call
+      const timeoutPromise = new Promise<ContentItem[]>((_, reject) => {
+        setTimeout(() => reject(new Error('Suggestions generation timed out')), 7000);
+      });
+      
+      // Generate personalized suggestions with timeout
+      const suggestions = await Promise.race([
+        geminiService.generatePersonalizedSuggestions(
+          user,
+          viewedContent,
+          availableContent
+        ),
+        timeoutPromise
+      ]);
+      
+      // Validate the results
+      if (!suggestions || suggestions.length === 0) {
+        console.warn('Empty suggestions returned, using fallback');
+        return getFallbackSuggestions();
+      }
+      
+      return suggestions;
+    } catch (error) {
+      console.error('Error getting personalized suggestions:', error);
+      return getFallbackSuggestions();
+    }
+  };
+
+  const refreshExplorationPath = async () => {
+    if (!user) return;
+    
+    try {
+      // Set a timeout for the API call to prevent long waits
+      const timeoutPromise = new Promise<ContentItem[]>((_, reject) => {
+        setTimeout(() => reject(new Error('Exploration path generation timed out')), 10000);
+      });
+      
+      // Generate exploration path with timeout
+      const path = await Promise.race([
+        geminiService.generateExplorationPath(user, MOCK_CONTENT),
+        timeoutPromise
+      ]);
+      
+      // Only update if we got results
+      if (path && path.length > 0) {
+        setExplorationPath(path);
+        
+        // Store the exploration path in user preferences - don't block on this
+        const pathIds = path.map(item => item.id);
+        userService.updatePreferences({
+          lastExplorationPath: pathIds
+        }).catch(err => {
+          console.warn('Failed to save exploration path to preferences:', err);
+        });
+      } else {
+        // If we got empty results, use a fallback approach
+        console.warn('Empty exploration path returned, using fallback');
+        const fallbackPath = MOCK_CONTENT
+          .filter(item => getSourceRelevance(item, user.source) >= 70)
+          .sort((a, b) => getSourceRelevance(b, user.source) - getSourceRelevance(a, user.source))
+          .slice(0, 3);
+        
+        if (fallbackPath.length > 0) {
+          setExplorationPath(fallbackPath);
+        }
+      }
+    } catch (error) {
+      console.error('Error refreshing exploration path:', error);
+      
+      // Fallback solution on error
+      const fallbackContent = MOCK_CONTENT
+        .sort((a, b) => {
+          const scoreA = getSourceRelevance(a, user.source);
+          const scoreB = getSourceRelevance(b, user.source);
+          return scoreB - scoreA;
+        })
+        .slice(0, 3);
+      
+      setExplorationPath(fallbackContent);
+    }
+  };
+
+  useEffect(() => {
+    initializeApp();
+  }, []);
+
+  return (
+    <AppContext.Provider
+      value={{
+        user,
+        source,
+        isLoading,
+        content,
+        welcomeMessage,
+        explorationPath,
+        userEngagement,
+        initializeApp,
+        setUserSource,
+        trackContentView,
+        trackInteraction,
+        getPersonalizedSuggestions,
+        refreshExplorationPath
+      }}
+    >
+      {children}
+    </AppContext.Provider>
+  );
+};
