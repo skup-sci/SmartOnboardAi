@@ -88,15 +88,6 @@ For demonstration purposes, you can simulate different traffic sources:
 - Direct
 - Unknown
 
-## Hackathon Criteria Alignment
-
-This project addresses the following hackathon evaluation criteria:
-
-- **AI Integration**: Deep integration of Gemini AI for content analysis and personalization
-- **Frontend Experience**: Rich visuals, animations, and interactive source-based UI
-- **Practicality**: Ready-to-use solution for real-world applications that need source-based personalization
-- **Innovation**: Goes beyond simple chatbots by creating entirely different experiences based on traffic sources
-
 ## License
 
 MIT
