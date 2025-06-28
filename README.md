@@ -6,6 +6,22 @@
 
 ---
 
+## 🏆 Hackathon Submission
+
+This project was built for [Build Fest '25 Hackathon](https://vision.hack2skill.com/event/buildfest?utm_source=hack2skill&utm_medium=homepage&sectionid=6809df329543bede75139890) using React Native, Expo, and Gemini AI.
+
+---
+
+## 📸 Screenshots
+
+### Home & Source Simulation
+![Home and Source Simulation](./assets/screenshot-home.png)
+
+### Content Detail & Personalization
+![Content Detail and Personalization](./assets/screenshot-detail.png)
+
+---
+
 SmartOnboardAI is a cross-platform, source-adaptive onboarding app built with React Native, Expo, and Gemini AI. It personalizes the onboarding experience based on how users arrive at your app (e.g., Instagram, referral, blog, or direct) and provides analytics and content tailored to each source.
 
 ## Features
